@@ -45,6 +45,32 @@ function doGet() {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
+// ── DEBUG: Run this manually in the Apps Script editor ─────────
+// Click the function dropdown → select testConnection → Run
+function testConnection() {
+  var token = getToken_();
+  var results = [];
+  Object.keys(DB).forEach(function(key) {
+    try {
+      var resp = UrlFetchApp.fetch(NOTION_BASE + '/databases/' + DB[key], {
+        method: 'get',
+        headers: {
+          'Authorization':  'Bearer ' + token,
+          'Notion-Version': NOTION_VERSION,
+        },
+        muteHttpExceptions: true,
+      });
+      var code = resp.getResponseCode();
+      var json = JSON.parse(resp.getContentText());
+      results.push(key + ' (' + DB[key] + '): ' + (code === 200 ? '✅ OK — ' + (json.title && json.title[0] ? json.title[0].plain_text : '?') : '❌ ' + code + ' — ' + (json.message || '?')));
+    } catch(e) {
+      results.push(key + ': ❌ Exception — ' + e.message);
+    }
+  });
+  Logger.log(results.join('\n'));
+  console.log(results.join('\n'));
+}
+
 // ── Main fetch — called by frontend ───────────────────────────
 function getDashboardData() {
   try {
