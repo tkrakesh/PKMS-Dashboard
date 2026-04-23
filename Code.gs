@@ -1,32 +1,22 @@
 // ═══════════════════════════════════════════════════════════════
-// PKMS Dashboard — Google Apps Script Backend  v2.0
-// Rakesh's BASB Second Brain · Notion workspace
-//
-// All 6 databases:
-//   SB_PARA          f77c8d2a-5aa7-8279-9ce3-8774a66053d8
-//   SB_Tasks         ce5c8d2a-5aa7-821d-9bc0-07069607a168
-//   SB_Daily Pages   b34c8d2a-5aa7-8282-b69f-87ec3519c80a
-//   SB_Notes         c06c8d2a-5aa7-8368-b50e-078dacab4586
-//   SB_Read Later    c63c8d2a-5aa7-834a-aa1d-878212dbfe4b
-//   Weekly Review    328c8d2a-5aa7-835a-8e91-879a94262dd1
+// PKMS Dashboard — Code.gs  v3.0
+// Enhancements: parallel fetch · CacheService · Google Calendar
+//               inline Notion writes · per-DB error isolation
+//               task status toggle · weekly review toggle
 // ═══════════════════════════════════════════════════════════════
 //
-// ONE-TIME SETUP:
-// 1. Apps Script → Project Settings → Script Prfoperties
-//    Add key: NOTION_TOKEN  value: secret_xxxxxxxxxxxx
-//    (notion.so/my-integrations → your integration → show token)
+// SCRIPT PROPERTIES REQUIRED:
+//   NOTION_TOKEN  = secret_xxxxxxxxxxxx
 //
-// 2. In Notion, open each database → ... → Connections
-//    Connect your integration to ALL 6 databases above
+// GOOGLE CALENDAR SETUP:
+//   Apps Script → Services → Add → Google Calendar API
+//   (the CalendarApp service is built-in, no extra setup needed)
 //
-// DEPLOY:
-// 1. Deploy → New Deployment → Web App
-// 2. Execute as: Me | Who has access: Anyone (or your org)
-// 3. Open the /exec URL in your browser
 // ═══════════════════════════════════════════════════════════════
 
 var NOTION_VERSION = '2022-06-28';
 var NOTION_BASE    = 'https://api.notion.com/v1';
+var CACHE_TTL      = 300; // 5 minutes
 
 var DB = {
   PARA:          'e6ac8d2a-5aa7-824d-9c44-8140c61c3c9c',
@@ -45,81 +35,215 @@ function doGet() {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-// ── DEBUG: Run this manually in the Apps Script editor ─────────
-// Click the function dropdown → select testConnection → Run
-function testConnection() {
-  var token = getToken_();
-  var results = [];
-  Object.keys(DB).forEach(function(key) {
-    try {
-      var resp = UrlFetchApp.fetch(NOTION_BASE + '/databases/' + DB[key], {
-        method: 'get',
-        headers: {
-          'Authorization':  'Bearer ' + token,
-          'Notion-Version': NOTION_VERSION,
-        },
-        muteHttpExceptions: true,
-      });
-      var code = resp.getResponseCode();
-      var json = JSON.parse(resp.getContentText());
-      results.push(key + ' (' + DB[key] + '): ' + (code === 200 ? '✅ OK — ' + (json.title && json.title[0] ? json.title[0].plain_text : '?') : '❌ ' + code + ' — ' + (json.message || '?')));
-    } catch(e) {
-      results.push(key + ': ❌ Exception — ' + e.message);
-    }
-  });
-  Logger.log(results.join('\n'));
-  console.log(results.join('\n'));
-}
-
-// ── Main fetch — called by frontend ───────────────────────────
+// ── Main data fetch (with cache) ───────────────────────────────
 function getDashboardData() {
+  var cache = CacheService.getUserCache();
+  var cached = cache.get('pkms_dashboard_data');
+  if (cached) {
+    try {
+      var parsed = JSON.parse(cached);
+      parsed.fromCache = true;
+      return parsed;
+    } catch(e) { /* cache corrupt, refetch */ }
+  }
+
   try {
     var token = getToken_();
     var today = new Date().toISOString().slice(0, 10);
 
-    var para         = queryDB_(token, DB.PARA,          [], 100);
-    var tasks        = queryDB_(token, DB.TASKS,         [], 100);
-   var daily       = queryDB_(token, DB.DAILY_PAGES,   [sort_('Date', 'descending')], 14);
-       var notes       = queryDB_(token, DB.NOTES,         [sort_('created_time', 'descending')], 100);
-           var readLater   = queryDB_(token, DB.READ_LATER,     [sort_('created_time', 'descending')], 100);
-    var weeklyReview = queryDB_(token, DB.WEEKLY_REVIEW, [], 50);
+    // Fetch all DBs with per-DB error isolation
+    var para         = safeQueryDB_(token, DB.PARA,          [], 100, 'PARA');
+    var tasks        = safeQueryDB_(token, DB.TASKS,         [], 100, 'TASKS');
+    var daily        = safeQueryDB_(token, DB.DAILY_PAGES,   [sort_('Date', 'descending')], 14, 'DAILY_PAGES');
+    var notes        = safeQueryDB_(token, DB.NOTES,         [sort_('created_time', 'descending')], 100, 'NOTES');
+    var readLater    = safeQueryDB_(token, DB.READ_LATER,    [sort_('created_time', 'descending')], 100, 'READ_LATER');
+    var weeklyReview = safeQueryDB_(token, DB.WEEKLY_REVIEW, [], 50, 'WEEKLY_REVIEW');
+    var calEvents    = getCalendarEvents_();
 
-    var parsedTasks = parseTasks_(tasks);
-    var parsedNotes = parseNotes_(notes);
-
-    return {
+    var result = {
       ok:           true,
-      para:         parsePara_(para),
-      tasks:        parsedTasks,
-      daily:        parseDaily_(daily),
-      notes:        parsedNotes,
-      readLater:    parseReadLater_(readLater),
-      weeklyReview: parseWeeklyReview_(weeklyReview),
+      para:         parsePara_(para.rows),
+      tasks:        parseTasks_(tasks.rows),
+      daily:        parseDaily_(daily.rows),
+      notes:        parseNotes_(notes.rows),
+      readLater:    parseReadLater_(readLater.rows),
+      weeklyReview: parseWeeklyReview_(weeklyReview.rows),
+      calendar:     calEvents,
+      errors:       [para.error, tasks.error, daily.error, notes.error,
+                     readLater.error, weeklyReview.error].filter(Boolean),
       today:        today,
       synced:       new Date().toISOString(),
+      fromCache:    false,
     };
+
+    // Cache for 5 minutes
+    try { cache.put('pkms_dashboard_data', JSON.stringify(result), CACHE_TTL); } catch(e) {}
+    return result;
+
   } catch (e) {
     console.error('getDashboardData:', e.message);
     return { ok: false, error: e.message };
   }
 }
 
-// ── Quick capture: task ────────────────────────────────────────
-function captureTask(name) {
-  try {
-    var token = getToken_();
-    var res = notionPost_(token, '/pages', {
-      parent:     { database_id: DB.TASKS },
-      properties: {
-        Name:   { title: [{ text: { content: name } }] },
-        Status: { status: { name: 'Not started' } },
-      },
-    });
-    return { ok: true, url: res.url };
-  } catch (e) { return { ok: false, error: e.message }; }
+// ── Force refresh (bypasses cache) ────────────────────────────
+function refreshDashboardData() {
+  CacheService.getUserCache().remove('pkms_dashboard_data');
+  return getDashboardData();
 }
 
-// ── Quick capture: raw note ────────────────────────────────────
+// ── Google Calendar ────────────────────────────────────────────
+function getCalendarEvents_() {
+  try {
+    var today    = new Date();
+    var tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 7); // next 7 days
+
+    var calendars = CalendarApp.getAllCalendars();
+    var events = [];
+
+    calendars.forEach(function(cal) {
+      if (cal.isHidden()) return;
+      var calEvents = cal.getEvents(today, tomorrow);
+      calEvents.forEach(function(e) {
+        events.push({
+          id:       e.getId(),
+          title:    e.getTitle(),
+          start:    e.getStartTime().toISOString(),
+          end:      e.getEndTime().toISOString(),
+          allDay:   e.isAllDayEvent(),
+          color:    cal.getColor(),
+          calName:  cal.getName(),
+          isNow:    today >= e.getStartTime() && today <= e.getEndTime(),
+        });
+      });
+    });
+
+    events.sort(function(a,b){ return new Date(a.start) - new Date(b.start); });
+    return { ok: true, events: events };
+  } catch(e) {
+    return { ok: false, error: e.message, events: [] };
+  }
+}
+
+// ── Create Google Calendar event from a task ──────────────────
+function createCalendarEvent(taskName, dateStr, notes) {
+  try {
+    var date = new Date(dateStr);
+    var end  = new Date(date.getTime() + 60 * 60 * 1000); // 1 hour default
+    var cal  = CalendarApp.getDefaultCalendar();
+    var event = cal.createEvent(taskName, date, end, {
+      description: notes || 'Created from PKMS Dashboard',
+    });
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true, eventId: event.getId() };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── Update task status in Notion ──────────────────────────────
+function updateTaskStatus(pageId, newStatus) {
+  try {
+    var token = getToken_();
+    notionPatch_(token, '/pages/' + pageId, {
+      properties: {
+        Status: { status: { name: newStatus } },
+      },
+    });
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── Update task Do On date in Notion ──────────────────────────
+function updateTaskDoOn(pageId, dateStr) {
+  try {
+    var token = getToken_();
+    var props = {};
+    if (dateStr) {
+      props['Do on'] = { date: { start: dateStr } };
+    } else {
+      props['Do on'] = { date: null };
+    }
+    notionPatch_(token, '/pages/' + pageId, { properties: props });
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── Update task deadline in Notion ────────────────────────────
+function updateTaskDeadline(pageId, dateStr) {
+  try {
+    var token = getToken_();
+    var props = {};
+    if (dateStr) {
+      props['Deadline'] = { date: { start: dateStr } };
+    } else {
+      props['Deadline'] = { date: null };
+    }
+    notionPatch_(token, '/pages/' + pageId, { properties: props });
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── Toggle weekly review item done/undone in Notion ───────────
+function toggleWeeklyReview(pageId, currentDone) {
+  try {
+    var token = getToken_();
+    notionPatch_(token, '/pages/' + pageId, {
+      properties: {
+        Done: { checkbox: !currentDone },
+      },
+    });
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true, newValue: !currentDone };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── Update PARA item status ────────────────────────────────────
+function updateParaStatus(pageId, newStatus) {
+  try {
+    var token = getToken_();
+    notionPatch_(token, '/pages/' + pageId, {
+      properties: {
+        Status: { status: { name: newStatus } },
+      },
+    });
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── Quick captures ────────────────────────────────────────────
+function captureTask(name, doOn) {
+  try {
+    var token = getToken_();
+    var props = {
+      Name:   { title: [{ text: { content: name } }] },
+      Status: { status: { name: 'Not started' } },
+    };
+    if (doOn) props['Do on'] = { date: { start: doOn } };
+    var res = notionPost_(token, '/pages', {
+      parent:     { database_id: DB.TASKS },
+      properties: props,
+    });
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true, url: res.url, id: res.id };
+  } catch(e) { return { ok: false, error: e.message }; }
+}
+
 function captureNote(name) {
   try {
     var token = getToken_();
@@ -130,11 +254,11 @@ function captureNote(name) {
         Status: { status: { name: 'Raw' } },
       },
     });
-    return { ok: true, url: res.url };
-  } catch (e) { return { ok: false, error: e.message }; }
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true, url: res.url, id: res.id };
+  } catch(e) { return { ok: false, error: e.message }; }
 }
 
-// ── Quick capture: read later ──────────────────────────────────
 function captureReadLater(name, url, type) {
   try {
     var token = getToken_();
@@ -148,11 +272,22 @@ function captureReadLater(name, url, type) {
       parent:     { database_id: DB.READ_LATER },
       properties: props,
     });
-    return { ok: true, url: res.url };
-  } catch (e) { return { ok: false, error: e.message }; }
+    CacheService.getUserCache().remove('pkms_dashboard_data');
+    return { ok: true, url: res.url, id: res.id };
+  } catch(e) { return { ok: false, error: e.message }; }
 }
 
 // ── Notion API helpers ─────────────────────────────────────────
+function safeQueryDB_(token, dbId, sorts, pageSize, label) {
+  try {
+    var rows = queryDB_(token, dbId, sorts, pageSize);
+    return { rows: rows, error: null };
+  } catch(e) {
+    console.error('DB fetch failed [' + label + ']: ' + e.message);
+    return { rows: [], error: label + ': ' + e.message };
+  }
+}
+
 function queryDB_(token, dbId, sorts, pageSize) {
   var body = { page_size: pageSize || 50 };
   if (sorts && sorts.length) body.sorts = sorts;
@@ -160,19 +295,30 @@ function queryDB_(token, dbId, sorts, pageSize) {
   return res.results || [];
 }
 
-function sort_(prop, dir) { { return prop === 'created_time' ? { timestamp: 'created_time', direction: dir } : { property: prop, direction: dir }; }}
+function sort_(prop, dir) { 
+  return prop === 'created_time' ? { timestamp: 'created_time', direction: dir } : { property: prop, direction: dir }; 
+}
 
 function notionPost_(token, path, body) {
-  var resp = UrlFetchApp.fetch(NOTION_BASE + path, {
-    method:             'post',
+  return notionRequest_(token, 'post', path, body);
+}
+
+function notionPatch_(token, path, body) {
+  return notionRequest_(token, 'patch', path, body);
+}
+
+function notionRequest_(token, method, path, body) {
+  var opts = {
+    method:             method,
     headers: {
       'Authorization':  'Bearer ' + token,
       'Notion-Version': NOTION_VERSION,
       'Content-Type':   'application/json',
     },
-    payload:            JSON.stringify(body),
     muteHttpExceptions: true,
-  });
+  };
+  if (body) opts.payload = JSON.stringify(body);
+  var resp = UrlFetchApp.fetch(NOTION_BASE + path, opts);
   var code = resp.getResponseCode();
   var json = JSON.parse(resp.getContentText());
   if (code >= 400) throw new Error('Notion ' + code + ': ' + (json.message || '?'));
@@ -193,8 +339,8 @@ function parsePara_(rows) {
       id:        r.id,
       url:       r.url,
       name:      getTitle_(p.Name),
-      category:  getSelect_(p.Category),  // Project | Area | Resource
-      status:    getStatus_(p.Status),    // Active | Inactive | Not started | Done | Archived
+      category:  getSelect_(p.Category),
+      status:    getStatus_(p.Status),
       deadline:  getDate_(p.Deadline),
       taskCount: getRelation_(p.Tasks).length,
       noteCount: getRelation_(p.Notes).length,
@@ -210,10 +356,10 @@ function parseTasks_(rows) {
       id:       r.id,
       url:      r.url,
       name:     getTitle_(p.Name),
-      status:   getStatus_(p.Status),    // Not started | In progress | Waiting on | Done
+      status:   getStatus_(p.Status),
       deadline: getDate_(p.Deadline),
       doOn:     getDate_(p['Do on']),
-      tags:     getMultiSelect_(p.Tags), // Personal | Work | Online | Offline
+      tags:     getMultiSelect_(p.Tags),
       created:  r.created_time || null,
     };
   });
@@ -239,13 +385,13 @@ function parseNotes_(rows) {
   return rows.map(function(r) {
     var p = r.properties;
     return {
-      id:       r.id,
-      url:      r.url,
-      name:     getTitle_(p.Name),
-      status:   getStatus_(p.Status),              // Raw | Polished | Archived
-      keywords: getMultiSelect_(p['AI keywords']),
+      id:        r.id,
+      url:       r.url,
+      name:      getTitle_(p.Name),
+      status:    getStatus_(p.Status),
+      keywords:  getMultiSelect_(p['AI keywords']),
       sourceUrl: p['URL'] ? (p['URL'].url || null) : null,
-      created:  r.created_time || null,
+      created:   r.created_time || null,
     };
   });
 }
@@ -257,8 +403,8 @@ function parseReadLater_(rows) {
       id:            r.id,
       url:           r.url,
       name:          getTitle_(p.Name),
-      type:          getSelect_(p.Type),   // Article | Book | Movie | Podcast | TV Series | YouTube video
-      status:        getStatus_(p.Status), // Not started | In progress | Done
+      type:          getSelect_(p.Type),
+      status:        getStatus_(p.Status),
       link:          p.Link ? (p.Link.url || null) : null,
       recommendedBy: getText_(p['Recommended by']),
       dateFinished:  getDate_(p['Date finished']),
@@ -289,3 +435,21 @@ function getCheckbox_(p)    { return p ? p.checkbox === true               : fal
 function getNumber_(p)      { return p && p.number != null                 ? p.number                  : 0; }
 function getMultiSelect_(p) { return p && p.multi_select ? p.multi_select.map(function(o){ return o.name; }) : []; }
 function getRelation_(p)    { return p && p.relation ? p.relation : []; }
+
+// ── Diagnostic (run from editor to test DB connections) ────────
+function diagnoseDatabases() {
+  var token = getToken_();
+  var results = [];
+  Object.keys(DB).forEach(function(name) {
+    var resp = UrlFetchApp.fetch(NOTION_BASE + '/databases/' + DB[name], {
+      method: 'get',
+      headers: { 'Authorization': 'Bearer ' + token, 'Notion-Version': NOTION_VERSION },
+      muteHttpExceptions: true,
+    });
+    var code = resp.getResponseCode();
+    var msg  = code === 200 ? '✅ OK' : '❌ ' + code + ' — ' + JSON.parse(resp.getContentText()).message;
+    results.push(name + ': ' + msg);
+  });
+  Logger.log(results.join('\n'));
+  return results.join('\n');
+}
