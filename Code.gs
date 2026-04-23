@@ -12,7 +12,7 @@
 // ═══════════════════════════════════════════════════════════════
 //
 // ONE-TIME SETUP:
-// 1. Apps Script → Project Settings → Script Properties
+// 1. Apps Script → Project Settings → Script Prfoperties
 //    Add key: NOTION_TOKEN  value: secret_xxxxxxxxxxxx
 //    (notion.so/my-integrations → your integration → show token)
 //
@@ -79,9 +79,9 @@ function getDashboardData() {
 
     var para         = queryDB_(token, DB.PARA,          [], 100);
     var tasks        = queryDB_(token, DB.TASKS,         [], 100);
-    var daily        = queryDB_(token, DB.DAILY_PAGES,   [sort_('date:Date:start','desc')], 14);
-    var notes        = queryDB_(token, DB.NOTES,         [sort_('Date Created','desc')], 100);
-    var readLater    = queryDB_(token, DB.READ_LATER,    [sort_('Date added','desc')], 100);
+   var daily       = queryDB_(token, DB.DAILY_PAGES,   [sort_('Date', 'descending')], 14);
+       var notes       = queryDB_(token, DB.NOTES,         [sort_('created_time', 'descending')], 100);
+           var readLater   = queryDB_(token, DB.READ_LATER,     [sort_('created_time', 'descending')], 100);
     var weeklyReview = queryDB_(token, DB.WEEKLY_REVIEW, [], 50);
 
     var parsedTasks = parseTasks_(tasks);
@@ -160,7 +160,7 @@ function queryDB_(token, dbId, sorts, pageSize) {
   return res.results || [];
 }
 
-function sort_(prop, dir) { return { property: prop, direction: dir }; }
+function sort_(prop, dir) { { return prop === 'created_time' ? { timestamp: 'created_time', direction: dir } : { property: prop, direction: dir }; }}
 
 function notionPost_(token, path, body) {
   var resp = UrlFetchApp.fetch(NOTION_BASE + path, {
