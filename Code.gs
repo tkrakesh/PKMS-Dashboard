@@ -453,3 +453,31 @@ function diagnoseDatabases() {
   Logger.log(results.join('\n'));
   return results.join('\n');
 }
+
+// ── Cleanup ────────────────────────────────────────────────────
+function deleteCoreReviewEvents() {
+  var d = new Date();
+  var start = new Date(d.getFullYear(), d.getMonth() - 1, 1); // 1 month ago
+  var end = new Date(d.getFullYear() + 1, d.getMonth(), 1); // 1 year from now
+  var cals = CalendarApp.getAllCalendars();
+  var count = 0;
+  var log = [];
+  for (var i = 0; i < cals.length; i++) {
+    var evs = cals[i].getEvents(start, end);
+    for (var j = 0; j < evs.length; j++) {
+      var title = evs[j].getTitle();
+      if (title.toLowerCase().indexOf('core review') !== -1) {
+        try {
+          evs[j].deleteEvent();
+          count++;
+          log.push('Deleted: ' + title);
+        } catch (e) {
+          log.push('Failed to delete: ' + title + ' (' + e.message + ')');
+        }
+      }
+    }
+  }
+  var res = 'Process finished. Deleted ' + count + ' events. Log: ' + log.join(', ');
+  Logger.log(res);
+  return res;
+}
