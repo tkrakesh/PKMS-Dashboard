@@ -457,27 +457,27 @@ function diagnoseDatabases() {
 // ── Cleanup ────────────────────────────────────────────────────
 function deleteCoreReviewEvents() {
   var d = new Date();
-  var start = new Date(d.getFullYear(), d.getMonth() - 1, 1); // 1 month ago
-  var end = new Date(d.getFullYear() + 1, d.getMonth(), 1); // 1 year from now
+  var start = new Date(d.getTime() - (30 * 24 * 60 * 60 * 1000)); // 30 days ago
+  var end = new Date(d.getTime() + (365 * 24 * 60 * 60 * 1000)); // 1 year from now
   var cals = CalendarApp.getAllCalendars();
   var count = 0;
-  var log = [];
+  
   for (var i = 0; i < cals.length; i++) {
     var evs = cals[i].getEvents(start, end);
     for (var j = 0; j < evs.length; j++) {
       var title = evs[j].getTitle();
-      if (title.toLowerCase().indexOf('core review') !== -1) {
+      
+      // Match "Review (CORE)", ignoring case
+      if (title.toLowerCase().indexOf('review (core)') !== -1) {
         try {
           evs[j].deleteEvent();
           count++;
-          log.push('Deleted: ' + title);
         } catch (e) {
-          log.push('Failed to delete: ' + title + ' (' + e.message + ')');
+          Logger.log('Failed to delete: ' + title + ' (' + e.message + ')');
         }
       }
     }
   }
-  var res = 'Process finished. Deleted ' + count + ' events. Log: ' + log.join(', ');
-  Logger.log(res);
-  return res;
+  
+  Logger.log('Cleanup complete: Deleted ' + count + ' CORE Review events.');
 }
