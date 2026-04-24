@@ -12,12 +12,12 @@ Connects to Notion via REST API. Two files only: Code.gs and Index.html.
 - Use clasp to push files to Apps Script after every change
 
 ## Notion Database IDs (already verified)
-PARA:          f77c8d2a-5aa7-8279-9ce3-8774a66053d8
-TASKS:         ce5c8d2a-5aa7-821d-9bc0-07069607a168
-DAILY_PAGES:   b34c8d2a-5aa7-8282-b69f-87ec3519c80a
-NOTES:         c06c8d2a-5aa7-8368-b50e-078dacab4586
-READ_LATER:    c63c8d2a-5aa7-834a-aa1d-878212dbfe4b
-WEEKLY_REVIEW: 328c8d2a-5aa7-835a-8e91-879a94262dd1
+PARA:          e6ac8d2a-5aa7-824d-9c44-8140c61c3c9c
+TASKS:         d5ec8d2a-5aa7-8390-accd-01c040bcdfc2
+DAILY_PAGES:   1c1c8d2a-5aa7-827c-a026-8139c5311d61
+NOTES:         3e9c8d2a-5aa7-827f-abfc-01bad92e324f
+READ_LATER:    7e6c8d2a-5aa7-83f9-a3aa-816ececee687
+WEEKLY_REVIEW: 762c8d2a-5aa7-8309-a088-01b1d8203121
 
 ## Colour palette (Digital Core — must not change)
 --accent: #A100FF  --purple: #7B2FBE  --purple-dim: #E8D5FF
